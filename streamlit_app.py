@@ -225,7 +225,9 @@ def render_session_pulse(results: dict[str, object], options: dict[str, bool]) -
             analyzer.SHOW_SAMPLES = saved["samples"]
 
 
-def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool]) -> go.Figure:
+def interactive_pulse_figure(
+    results: dict[str, object], options: dict[str, bool], mobile_layout: bool = False
+) -> go.Figure:
     """Build a browser-rendered pulse plot for fast trace toggling."""
     cache = results["plot_cache"]
     context = results["plot_context"]
@@ -282,19 +284,24 @@ def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool
         dfe_prefix += " + CTLE"
     add_trace("after_dfe", cache["rx_after_dfe"], f"RX: {dfe_prefix} + DFE", "#d62728")
 
-    figure.update_layout(
-        title="TX/RX pulse overlay",
-        xaxis_title=x_title,
-        yaxis_title="Differential voltage [V]" if cache["channel_mode"] == "DIFF" else "Voltage [V]",
-        hovermode="x unified",
-        legend={
+    legend_layout = (
+        {
             "orientation": "h",
             "x": 0.0,
             "xanchor": "left",
             "y": 1.02,
             "yanchor": "bottom",
-        },
-        margin={"l": 55, "r": 25, "t": 115, "b": 50},
+        }
+        if mobile_layout
+        else {"orientation": "v"}
+    )
+    figure.update_layout(
+        title="TX/RX pulse overlay",
+        xaxis_title=x_title,
+        yaxis_title="Differential voltage [V]" if cache["channel_mode"] == "DIFF" else "Voltage [V]",
+        hovermode="x unified",
+        legend=legend_layout,
+        margin={"l": 55, "r": 25, "t": 115 if mobile_layout else 55, "b": 50},
         height=520,
     )
     figure.update_xaxes(range=x_range, autorange=False, showgrid=True)
@@ -306,12 +313,21 @@ st.set_page_config(page_title="SBR Analyzer", page_icon="📈", layout="wide")
 st.markdown(
     """
     <style>
+    .st-key-mobile_pulse_plot {
+        display: none;
+    }
     div[data-testid="stMainBlockContainer"] {
         max-width: 80vw;
         margin-left: auto;
         margin-right: auto;
     }
     @media (max-width: 768px) {
+        .st-key-desktop_pulse_plot {
+            display: none;
+        }
+        .st-key-mobile_pulse_plot {
+            display: block;
+        }
         div[data-testid="stMainBlockContainer"] {
             max-width: 96vw;
             padding-left: 0.5rem;
@@ -508,16 +524,25 @@ if results:
             "Sample markers (1 UI interval)", value=True, key="result_graph_samples"
         )
 
-        pulse_figure = interactive_pulse_figure(results, graph_values)
-        st.plotly_chart(
-            pulse_figure,
-            use_container_width=True,
-            config={
-                "displaylogo": False,
-                "responsive": True,
-                "toImageButtonOptions": {"format": "png", "filename": "sbr_analysis_pulse"},
-            },
-        )
+        chart_config = {
+            "displaylogo": False,
+            "responsive": True,
+            "toImageButtonOptions": {"format": "png", "filename": "sbr_analysis_pulse"},
+        }
+        with st.container(key="desktop_pulse_plot"):
+            st.plotly_chart(
+                interactive_pulse_figure(results, graph_values, mobile_layout=False),
+                use_container_width=True,
+                config=chart_config,
+                key="desktop_pulse_chart",
+            )
+        with st.container(key="mobile_pulse_plot"):
+            st.plotly_chart(
+                interactive_pulse_figure(results, graph_values, mobile_layout=True),
+                use_container_width=True,
+                config=chart_config,
+                key="mobile_pulse_chart",
+            )
         st.caption("The camera icon in the graph toolbar saves the currently visible traces as a PNG.")
     with magnitude_tab:
         st.image(results["magnitude"], use_container_width=True)
