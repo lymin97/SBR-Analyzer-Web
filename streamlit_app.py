@@ -234,11 +234,19 @@ def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool
     if str(context["time_unit"]).upper() == "UI":
         x_values = (time - main_index * float(cache["dt"])) / float(cache["ui"])
         x_title = "Time [UI]"
-        x_range = [-max(int(context["cursor_pre"]) + 1, 2), int(context["cursor_post"]) + 1]
+        x_range = [-int(context["cursor_pre"]), int(context["cursor_post"])]
     else:
         x_values = time - main_index * float(cache["dt"])
         x_title = "Time [s]"
-        x_range = None
+        x_range = [
+            -int(context["cursor_pre"]) * float(cache["ui"]),
+            int(context["cursor_post"]) * float(cache["ui"]),
+        ]
+    if x_range[0] == x_range[1]:
+        half_ui = 0.5 if x_title == "Time [UI]" else 0.5 * float(cache["ui"])
+        x_range = [x_range[0] - half_ui, x_range[1] + half_ui]
+    visible_indices = np.flatnonzero((x_values >= x_range[0]) & (x_values <= x_range[1]))
+    plot_x = x_values[visible_indices]
 
     figure = go.Figure()
     sample_positions = np.asarray(cache["positions"], dtype=int)
@@ -248,11 +256,12 @@ def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool
             return
         y_array = np.asarray(y_values)
         figure.add_trace(go.Scatter(
-            x=x_values, y=y_array, mode="lines", name=label,
+            x=plot_x, y=y_array[visible_indices], mode="lines", name=label,
             line={"color": color, "width": 2, "dash": dash},
         ))
         if options["samples"] and key not in {"tx", "ffe_output"}:
             valid = sample_positions[(sample_positions >= 0) & (sample_positions < y_array.size)]
+            valid = valid[(x_values[valid] >= x_range[0]) & (x_values[valid] <= x_range[1])]
             figure.add_trace(go.Scatter(
                 x=x_values[valid], y=y_array[valid], mode="markers",
                 name=f"{label} samples", showlegend=False,
@@ -278,11 +287,17 @@ def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool
         xaxis_title=x_title,
         yaxis_title="Differential voltage [V]" if cache["channel_mode"] == "DIFF" else "Voltage [V]",
         hovermode="x unified",
-        legend={"orientation": "v"},
-        margin={"l": 55, "r": 25, "t": 55, "b": 50},
+        legend={
+            "orientation": "h",
+            "x": 0.0,
+            "xanchor": "left",
+            "y": 1.02,
+            "yanchor": "bottom",
+        },
+        margin={"l": 55, "r": 25, "t": 115, "b": 50},
         height=520,
     )
-    figure.update_xaxes(range=x_range, showgrid=True)
+    figure.update_xaxes(range=x_range, autorange=False, showgrid=True)
     figure.update_yaxes(showgrid=True)
     return figure
 
@@ -306,7 +321,7 @@ st.markdown(
             overflow-x: auto;
         }
         div[data-testid="stPlotlyChart"] > div {
-            min-width: 720px;
+            min-width: 960px;
         }
     }
     div[data-testid="stNumberInput"] button {
