@@ -296,13 +296,13 @@ def interactive_pulse_figure(
         else {"orientation": "v"}
     )
     figure.update_layout(
-        title=None if mobile_layout else "TX/RX pulse overlay",
+        title="" if mobile_layout else "TX/RX pulse overlay",
         xaxis_title=x_title,
         yaxis_title="Differential voltage [V]" if cache["channel_mode"] == "DIFF" else "Voltage [V]",
         hovermode="x unified",
         legend=legend_layout,
-        margin={"l": 55, "r": 25, "t": 70 if mobile_layout else 55, "b": 50},
-        height=520,
+        margin={"l": 55, "r": 25, "t": 150 if mobile_layout else 55, "b": 50},
+        height=400 if mobile_layout else 520,
     )
     figure.update_xaxes(range=x_range, autorange=False, showgrid=True)
     figure.update_yaxes(showgrid=True)
@@ -328,23 +328,11 @@ st.markdown(
         .st-key-mobile_pulse_plot {
             display: block;
             width: 100%;
-            overflow-x: auto !important;
-            overflow-y: hidden;
         }
         div[data-testid="stMainBlockContainer"] {
             max-width: 96vw;
             padding-left: 0.5rem;
             padding-right: 0.5rem;
-        }
-        .st-key-mobile_pulse_plot div[data-testid="stPlotlyChart"] {
-            width: 960px !important;
-            min-width: 960px !important;
-            max-width: none !important;
-        }
-        .st-key-mobile_pulse_plot div[data-testid="stPlotlyChart"] > div {
-            width: 960px !important;
-            min-width: 960px !important;
-            max-width: none !important;
         }
     }
     div[data-testid="stNumberInput"] button {
