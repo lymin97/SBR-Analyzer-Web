@@ -12,6 +12,8 @@ import threading
 import zipfile
 from pathlib import Path
 
+import numpy as np
+import plotly.graph_objects as go
 import streamlit as st
 
 import sbr_analyzer as analyzer
@@ -177,7 +179,6 @@ def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object
         return payload
 
 
-@st.cache_data(show_spinner=False, max_entries=64)
 def render_session_pulse(results: dict[str, object], options: dict[str, bool]) -> bytes:
     """Redraw one session's cached pulse data without repeating channel analysis."""
     with ANALYSIS_LOCK, tempfile.TemporaryDirectory(prefix="sbr_plot_") as temporary:
@@ -222,6 +223,68 @@ def render_session_pulse(results: dict[str, object], options: dict[str, bool]) -
             analyzer.SHOW_AFTER_CTLE = saved["after_ctle"]
             analyzer.SHOW_AFTER_DFE = saved["after_dfe"]
             analyzer.SHOW_SAMPLES = saved["samples"]
+
+
+def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool]) -> go.Figure:
+    """Build a browser-rendered pulse plot for fast trace toggling."""
+    cache = results["plot_cache"]
+    context = results["plot_context"]
+    time = np.asarray(cache["time"])
+    main_index = int(cache["main_index"])
+    if str(context["time_unit"]).upper() == "UI":
+        x_values = (time - main_index * float(cache["dt"])) / float(cache["ui"])
+        x_title = "Time [UI]"
+        x_range = [-max(int(context["cursor_pre"]) + 1, 2), int(context["cursor_post"]) + 1]
+    else:
+        x_values = time - main_index * float(cache["dt"])
+        x_title = "Time [s]"
+        x_range = None
+
+    figure = go.Figure()
+    sample_positions = np.asarray(cache["positions"], dtype=int)
+
+    def add_trace(key: str, y_values, label: str, color: str, dash: str = "solid") -> None:
+        if not options[key]:
+            return
+        y_array = np.asarray(y_values)
+        figure.add_trace(go.Scatter(
+            x=x_values, y=y_array, mode="lines", name=label,
+            line={"color": color, "width": 2, "dash": dash},
+        ))
+        if options["samples"] and key != "tx":
+            valid = sample_positions[(sample_positions >= 0) & (sample_positions < y_array.size)]
+            figure.add_trace(go.Scatter(
+                x=x_values[valid], y=y_array[valid], mode="markers",
+                name=f"{label} samples", showlegend=False,
+                marker={"color": color, "size": 7, "line": {"width": 1, "color": "white"}},
+                hovertemplate=f"{label}<br>%{{x}}<br>%{{y}}<extra></extra>",
+            ))
+
+    add_trace("tx", np.roll(cache["tx"], main_index), "TX pulse (1 UI)", "#1f77b4")
+    add_trace("ffe_output", cache["tx_after_ffe"], "FFE output", "#17becf", "dash")
+    add_trace("channel", cache["rx_channel"], "RX: Channel", "#ff7f0e")
+    add_trace("after_ffe", cache["rx_after_ffe"], "RX: FFE + Channel", "#9467bd")
+
+    ffe_enabled = str(context["eq_mode"]) in {"FFE", "BOTH"}
+    ctle_label = "RX: FFE + Channel + CTLE" if ffe_enabled else "RX: Channel + CTLE"
+    add_trace("after_ctle", cache["rx_after_ctle"], ctle_label, "#2ca02c")
+    dfe_prefix = "FFE + Channel" if ffe_enabled else "Channel"
+    if float(context["ctle_db"]) > 0.0:
+        dfe_prefix += " + CTLE"
+    add_trace("after_dfe", cache["rx_after_dfe"], f"RX: {dfe_prefix} + DFE", "#d62728")
+
+    figure.update_layout(
+        title="TX/RX pulse overlay",
+        xaxis_title=x_title,
+        yaxis_title="Differential voltage [V]" if cache["channel_mode"] == "DIFF" else "Voltage [V]",
+        hovermode="x unified",
+        legend={"orientation": "v"},
+        margin={"l": 55, "r": 25, "t": 55, "b": 50},
+        height=650,
+    )
+    figure.update_xaxes(range=x_range, showgrid=True)
+    figure.update_yaxes(showgrid=True)
+    return figure
 
 
 st.set_page_config(page_title="SBR Analyzer", page_icon="📈", layout="wide")
@@ -412,8 +475,16 @@ if results:
             "Sample markers (1 UI interval)", value=True, key="result_graph_samples"
         )
 
-        display_pulse = render_session_pulse(results, graph_values)
-        st.image(display_pulse, use_container_width=True)
+        pulse_figure = interactive_pulse_figure(results, graph_values)
+        st.plotly_chart(
+            pulse_figure,
+            use_container_width=True,
+            config={
+                "displaylogo": False,
+                "toImageButtonOptions": {"format": "png", "filename": "sbr_analysis_pulse"},
+            },
+        )
+        st.caption("The camera icon in the graph toolbar saves the currently visible traces as a PNG.")
     with magnitude_tab:
         st.image(results["magnitude"], use_container_width=True)
     with cursor_tab:
@@ -436,16 +507,20 @@ if results:
         "taps": save_columns[3].checkbox("EQ Taps CSV", value=True),
     }
     if any(save_selection.values()):
-        download_results = dict(results)
-        download_results["pulse"] = display_pulse
-        download_zip = selected_results_zip(download_results, save_selection)
+        def make_selected_download() -> bytes:
+            download_results = dict(results)
+            if save_selection["pulse"]:
+                download_results["pulse"] = render_session_pulse(results, graph_values)
+            return selected_results_zip(download_results, save_selection)
+
         st.download_button(
             "Download Selected Results",
-            data=download_zip,
+            data=make_selected_download,
             file_name="sbr_analysis.zip",
             mime="application/zip",
             type="primary",
             use_container_width=True,
+            on_click="ignore",
         )
     else:
         st.warning("Select at least one result to download.")
