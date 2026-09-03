@@ -357,6 +357,17 @@ uploaded = st.file_uploader(
 if uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 
+active_input_name = uploaded.name if uploaded is not None else SAMPLE_FILE.name
+active_input_size = uploaded.size if uploaded is not None else SAMPLE_FILE.stat().st_size
+input_signature = (active_input_name, active_input_size)
+if st.session_state.get("detected_input_signature") != input_signature:
+    suffix = Path(active_input_name).suffix.lower()
+    if suffix == ".s2p":
+        st.session_state["channel_mode"] = "Single-ended"
+    elif suffix == ".s4p":
+        st.session_state["channel_mode"] = "Differential"
+    st.session_state["detected_input_signature"] = input_signature
+
 st.subheader("Channel / Ports")
 channel_mode_label = setting_row(
     "Channel mode", "Select a single-ended or differential channel.",
@@ -401,7 +412,7 @@ with st.container(border=True):
     rx_termination_value = setting_row(
         "RX termination [ohm]", "Optional implemented receiver termination impedance.",
         "number_input", min_value=0.001, value=100.0 if channel_mode == "DIFF" else 50.0,
-        disabled=matched, key="rx_termination",
+        disabled=matched, key=f"rx_termination_{channel_mode.lower()}",
     )
     rx_termination = None if matched else float(rx_termination_value)
 

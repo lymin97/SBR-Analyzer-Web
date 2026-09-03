@@ -247,13 +247,24 @@ def time_response(frequency_hz: np.ndarray, transfer: np.ndarray, ui: float):
     positive = positive[positive > 0]
     if positive.size == 0:
         raise ValueError("At least two distinct frequency points are required.")
-    df = float(np.median(positive))
-    required_nfft = max(2048, int(math.ceil(32.0 / (ui * df))))
+    measured_df = float(np.median(positive))
+    # FFT record length is 1/df. Limit df so the record always contains the
+    # requested pre/main/post cursor window plus alignment headroom.
+    required_record_ui = max(
+        32.0,
+        float(2 * CURSOR_PRE_COUNT + CURSOR_POST_COUNT + 4),
+    )
+    df = min(measured_df, 1.0 / (required_record_ui * ui))
+    fmax = float(np.max(frequency_hz))
+    required_nfft = max(
+        2048,
+        int(math.ceil(32.0 / (ui * df))),
+        int(math.ceil(2.0 * fmax / df)) + 2,
+    )
     nfft = 1 << int(math.ceil(math.log2(required_nfft)))
     f_bins = np.arange(nfft // 2 + 1) * df
     spectrum = interpolate_transfer(frequency_hz, transfer, f_bins)
     # Gentle taper over the final 5% of measured bandwidth to reduce ringing.
-    fmax = float(np.max(frequency_hz))
     start = 0.95 * fmax
     mask = (f_bins >= start) & (f_bins <= fmax)
     spectrum[mask] *= 0.5 * (1.0 + np.cos(np.pi * (f_bins[mask] - start) / (fmax - start)))
@@ -517,11 +528,18 @@ def main():
 
     time, impulse, f_bins, base_spectrum = time_response(ts.frequency_hz, transfer, ui)
     dt = time[1] - time[0]
+    # A short/low-delay channel can peak before the requested pre-cursor
+    # window. Add a non-circular time-origin delay without changing its shape.
+    alignment_samples = int(math.ceil((CURSOR_PRE_COUNT + 1) * ui / dt))
+    if alignment_samples >= len(impulse):
+        raise ValueError("The requested pre-cursor range exceeds the generated time record.")
+    impulse = np.pad(impulse, (alignment_samples, 0))[:len(impulse)]
     tx = make_tx_pulse(time, ui)
     rx_channel = np.convolve(impulse, tx, mode="full")[:len(time)]
 
     ctle = ctle_response(f_bins, CTLE_DB, nyquist)
     impulse_ctle = np.fft.irfft(base_spectrum * ctle, n=len(time))
+    impulse_ctle = np.pad(impulse_ctle, (alignment_samples, 0))[:len(impulse_ctle)]
     rx_channel_ctle = np.convolve(impulse_ctle, tx, mode="full")[:len(time)]
     k, cursors, positions, main_index = extract_cursors(rx_channel_ctle, dt, ui)
     main_pos = int(np.where(k == 0)[0][0])
