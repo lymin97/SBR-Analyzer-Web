@@ -251,7 +251,7 @@ def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool
             x=x_values, y=y_array, mode="lines", name=label,
             line={"color": color, "width": 2, "dash": dash},
         ))
-        if options["samples"] and key != "tx":
+        if options["samples"] and key not in {"tx", "ffe_output"}:
             valid = sample_positions[(sample_positions >= 0) & (sample_positions < y_array.size)]
             figure.add_trace(go.Scatter(
                 x=x_values[valid], y=y_array[valid], mode="markers",
