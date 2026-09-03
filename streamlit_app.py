@@ -296,6 +296,19 @@ st.markdown(
         margin-left: auto;
         margin-right: auto;
     }
+    @media (max-width: 768px) {
+        div[data-testid="stMainBlockContainer"] {
+            max-width: 96vw;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+        div[data-testid="stPlotlyChart"] {
+            overflow-x: auto;
+        }
+        div[data-testid="stPlotlyChart"] > div {
+            min-width: 720px;
+        }
+    }
     div[data-testid="stNumberInput"] button {
         display: none;
     }
@@ -486,6 +499,7 @@ if results:
             use_container_width=True,
             config={
                 "displaylogo": False,
+                "responsive": True,
                 "toImageButtonOptions": {"format": "png", "filename": "sbr_analysis_pulse"},
             },
         )
