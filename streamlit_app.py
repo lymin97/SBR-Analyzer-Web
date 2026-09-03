@@ -225,6 +225,16 @@ def render_session_pulse(results: dict[str, object], options: dict[str, bool]) -
 
 
 st.set_page_config(page_title="SBR Analyzer", page_icon="📈", layout="wide")
+st.markdown(
+    """
+    <style>
+    div[data-testid="stNumberInput"] button {
+        display: none;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("Single-Bit Response Analyzer")
 st.caption("Designed and developed by Young-Min Lee · Online demo")
 st.info(
