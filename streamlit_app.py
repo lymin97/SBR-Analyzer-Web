@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import csv
 import io
 import re
@@ -32,9 +33,48 @@ def shared_analysis_lock() -> threading.Lock:
 ANALYSIS_LOCK = shared_analysis_lock()
 
 
+def setting_row(label: str, description: str, widget: str, **kwargs):
+    """Render one setting per row with a short muted description."""
+    label_column, input_column, help_column = st.columns([1.15, 1.35, 2.5], vertical_alignment="center")
+    label_column.markdown(f"**{label}**")
+    value = getattr(input_column, widget)(
+        label,
+        label_visibility="collapsed",
+        **kwargs,
+    )
+    help_column.caption(description)
+    return value
+
+
 def csv_rows(data: bytes) -> list[dict[str, str]]:
     text = data.decode("utf-8-sig")
     return list(csv.DictReader(io.StringIO(text)))
+
+
+def fixed_decimal_csv(data: bytes, decimal_places: int) -> bytes:
+    """Format decimal CSV fields without scientific notation."""
+    source = io.StringIO(data.decode("utf-8-sig"))
+    reader = csv.reader(source)
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    threshold = 0.5 * 10.0 ** (-decimal_places)
+    for row in reader:
+        formatted = []
+        for value in row:
+            stripped = value.strip()
+            if "." not in stripped and "e" not in stripped.lower():
+                formatted.append(value)
+                continue
+            try:
+                number = float(stripped)
+            except ValueError:
+                formatted.append(value)
+                continue
+            if abs(number) < threshold:
+                number = 0.0
+            formatted.append(f"{number:.{decimal_places}f}")
+        writer.writerow(formatted)
+    return output.getvalue().encode("utf-8-sig")
 
 
 def selected_results_zip(results: dict[str, object], selected: dict[str, bool]) -> bytes:
@@ -83,13 +123,13 @@ def configure_analyzer(settings: dict[str, object], input_path: Path, output_pat
     analyzer.DISPLAY_DECIMAL_PLACES = int(settings["decimal_places"])
     analyzer.SAVE_RESULT_CSV = True
     analyzer.SAVE_PLOT_PNG = True
-    analyzer.SHOW_TX_PULSE = bool(settings["show_tx_pulse"])
-    analyzer.SHOW_FFE_OUTPUT = bool(settings["show_ffe_output"])
-    analyzer.SHOW_CHANNEL = bool(settings["show_channel"])
-    analyzer.SHOW_AFTER_FFE = bool(settings["show_after_ffe"])
-    analyzer.SHOW_AFTER_CTLE = bool(settings["show_after_ctle"])
-    analyzer.SHOW_AFTER_DFE = bool(settings["show_after_dfe"])
-    analyzer.SHOW_SAMPLES = bool(settings["show_samples"])
+    analyzer.SHOW_TX_PULSE = True
+    analyzer.SHOW_FFE_OUTPUT = True
+    analyzer.SHOW_CHANNEL = True
+    analyzer.SHOW_AFTER_FFE = True
+    analyzer.SHOW_AFTER_CTLE = True
+    analyzer.SHOW_AFTER_DFE = True
+    analyzer.SHOW_SAMPLES = True
 
 
 def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object]:
@@ -116,13 +156,71 @@ def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object
             "cursors": "cursor_results.csv",
             "taps": "equalizer_taps.csv",
         }
-        payload: dict[str, object] = {"log": log.getvalue(), "input_name": input_name}
+        payload: dict[str, object] = {
+            "log": log.getvalue(),
+            "input_name": input_name,
+            "plot_cache": copy.deepcopy(analyzer.PULSE_PLOT_CACHE),
+            "plot_context": {
+                "eq_mode": str(settings["eq_mode"]),
+                "ctle_db": float(settings["ctle_db"]),
+                "cursor_pre": int(settings["cursor_pre"]),
+                "cursor_post": int(settings["cursor_post"]),
+                "time_unit": str(settings["time_unit"]),
+                "decimal_places": int(settings["decimal_places"]),
+            },
+        }
         for key, filename in filenames.items():
             path = work / filename
             if not path.is_file():
                 raise RuntimeError(f"Expected result was not generated: {filename}")
             payload[key] = path.read_bytes()
         return payload
+
+
+def render_session_pulse(results: dict[str, object], options: dict[str, bool]) -> bytes:
+    """Redraw one session's cached pulse data without repeating channel analysis."""
+    with ANALYSIS_LOCK, tempfile.TemporaryDirectory(prefix="sbr_plot_") as temporary:
+        path = Path(temporary) / "pulse_and_cursor.png"
+        saved = {
+            "cache": analyzer.PULSE_PLOT_CACHE,
+            "pre": analyzer.CURSOR_PRE_COUNT,
+            "post": analyzer.CURSOR_POST_COUNT,
+            "unit": analyzer.TIME_AXIS_UNIT,
+            "tx": analyzer.SHOW_TX_PULSE,
+            "ffe_output": analyzer.SHOW_FFE_OUTPUT,
+            "channel": analyzer.SHOW_CHANNEL,
+            "after_ffe": analyzer.SHOW_AFTER_FFE,
+            "after_ctle": analyzer.SHOW_AFTER_CTLE,
+            "after_dfe": analyzer.SHOW_AFTER_DFE,
+            "samples": analyzer.SHOW_SAMPLES,
+        }
+        context = results["plot_context"]
+        try:
+            analyzer.PULSE_PLOT_CACHE = copy.deepcopy(results["plot_cache"])
+            analyzer.CURSOR_PRE_COUNT = int(context["cursor_pre"])
+            analyzer.CURSOR_POST_COUNT = int(context["cursor_post"])
+            analyzer.TIME_AXIS_UNIT = str(context["time_unit"])
+            analyzer.SHOW_TX_PULSE = options["tx"]
+            analyzer.SHOW_FFE_OUTPUT = options["ffe_output"]
+            analyzer.SHOW_CHANNEL = options["channel"]
+            analyzer.SHOW_AFTER_FFE = options["after_ffe"]
+            analyzer.SHOW_AFTER_CTLE = options["after_ctle"]
+            analyzer.SHOW_AFTER_DFE = options["after_dfe"]
+            analyzer.SHOW_SAMPLES = options["samples"]
+            analyzer.render_cached_pulse_plot(path)
+            return path.read_bytes()
+        finally:
+            analyzer.PULSE_PLOT_CACHE = saved["cache"]
+            analyzer.CURSOR_PRE_COUNT = saved["pre"]
+            analyzer.CURSOR_POST_COUNT = saved["post"]
+            analyzer.TIME_AXIS_UNIT = saved["unit"]
+            analyzer.SHOW_TX_PULSE = saved["tx"]
+            analyzer.SHOW_FFE_OUTPUT = saved["ffe_output"]
+            analyzer.SHOW_CHANNEL = saved["channel"]
+            analyzer.SHOW_AFTER_FFE = saved["after_ffe"]
+            analyzer.SHOW_AFTER_CTLE = saved["after_ctle"]
+            analyzer.SHOW_AFTER_DFE = saved["after_dfe"]
+            analyzer.SHOW_SAMPLES = saved["samples"]
 
 
 st.set_page_config(page_title="SBR Analyzer", page_icon="📈", layout="wide")
@@ -142,64 +240,82 @@ if uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 
 st.subheader("Channel / Ports")
-channel_mode_label = st.selectbox("Channel mode", ["Single-ended", "Differential"], index=1)
+channel_mode_label = setting_row(
+    "Channel mode", "Select a single-ended or differential channel.",
+    "selectbox", options=["Single-ended", "Differential"], index=1, key="channel_mode",
+)
 channel_mode = "SE" if channel_mode_label == "Single-ended" else "DIFF"
 
 with st.container(border=True):
-    port_columns = st.columns(4)
     if channel_mode == "SE":
-        tx_port = port_columns[0].number_input("TX port", min_value=1, value=1, step=1)
-        rx_port = port_columns[1].number_input("RX port", min_value=1, value=2, step=1)
+        tx_port = setting_row(
+            "TX port", "Single-ended transmitter port number.",
+            "number_input", min_value=1, value=1, step=1, key="tx_port",
+        )
+        rx_port = setting_row(
+            "RX port", "Single-ended receiver port number.",
+            "number_input", min_value=1, value=2, step=1, key="rx_port",
+        )
         tx_pos_port, tx_neg_port, rx_pos_port, rx_neg_port = 1, 3, 2, 4
     else:
-        tx_pos_port = port_columns[0].number_input("TX+ port", min_value=1, value=1, step=1)
-        tx_neg_port = port_columns[1].number_input("TX− port", min_value=1, value=3, step=1)
-        rx_pos_port = port_columns[2].number_input("RX+ port", min_value=1, value=2, step=1)
-        rx_neg_port = port_columns[3].number_input("RX− port", min_value=1, value=4, step=1)
+        tx_pos_port = setting_row(
+            "TX+ port", "Differential transmitter positive port.",
+            "number_input", min_value=1, value=1, step=1, key="tx_pos_port",
+        )
+        tx_neg_port = setting_row(
+            "TX− port", "Differential transmitter negative port.",
+            "number_input", min_value=1, value=3, step=1, key="tx_neg_port",
+        )
+        rx_pos_port = setting_row(
+            "RX+ port", "Differential receiver positive port.",
+            "number_input", min_value=1, value=2, step=1, key="rx_pos_port",
+        )
+        rx_neg_port = setting_row(
+            "RX− port", "Differential receiver negative port.",
+            "number_input", min_value=1, value=4, step=1, key="rx_neg_port",
+        )
         tx_port, rx_port = 1, 2
 
-    matched = st.checkbox("Use matched RX termination", value=True)
-    rx_termination_value = st.number_input(
-        "RX termination [ohm]", min_value=0.001, value=100.0 if channel_mode == "DIFF" else 50.0,
-        disabled=matched,
+    matched = setting_row(
+        "Matched RX termination", "Use the Touchstone reference impedance.",
+        "checkbox", value=True, key="matched_rx",
+    )
+    rx_termination_value = setting_row(
+        "RX termination [ohm]", "Optional implemented receiver termination impedance.",
+        "number_input", min_value=0.001, value=100.0 if channel_mode == "DIFF" else 50.0,
+        disabled=matched, key="rx_termination",
     )
     rx_termination = None if matched else float(rx_termination_value)
 
     st.subheader("Signal / Cursor")
-    signal_columns = st.columns(3)
-    symbol_rate = signal_columns[0].number_input("Symbol rate [Baud]", min_value=1.0, value=200.0e6, format="%.6e")
-    tx_voltage = signal_columns[1].number_input("TX pulse [V]", min_value=0.001, value=1.0)
-    pulse_width = signal_columns[2].number_input("Pulse width [UI]", min_value=0.001, value=1.0)
-    edge_columns = st.columns(2)
-    rise_time = edge_columns[0].number_input("TX rise time [s]", min_value=0.0, value=0.0, format="%.6e")
-    fall_time = edge_columns[1].number_input("TX fall time [s]", min_value=0.0, value=0.0, format="%.6e")
-    cursor_columns = st.columns(4)
-    cursor_pre = cursor_columns[0].number_input("Pre cursors", min_value=0, value=5, step=1)
-    cursor_post = cursor_columns[1].number_input("Post cursors", min_value=0, value=10, step=1)
-    time_unit = cursor_columns[2].selectbox("Time unit", ["UI", "s"])
-    decimal_places = cursor_columns[3].number_input("Display decimals", min_value=1, max_value=15, value=6, step=1)
+    symbol_rate = setting_row("Symbol rate [Baud]", "Data symbol rate used to define 1 UI.", "number_input", min_value=1.0, value=200.0e6, format="%.6e", key="symbol_rate")
+    tx_voltage = setting_row("TX pulse [V]", "Transmitted single-bit pulse amplitude.", "number_input", min_value=0.001, value=1.0, key="tx_voltage")
+    pulse_width = setting_row("Pulse width [UI]", "Duration of the transmitted pulse in UI.", "number_input", min_value=0.001, value=1.0, key="pulse_width")
+    rise_time = setting_row("TX rise time [s]", "Optional transmitter rise time; zero is ideal.", "number_input", min_value=0.0, value=0.0, format="%.6e", key="rise_time")
+    fall_time = setting_row("TX fall time [s]", "Optional transmitter fall time; zero is ideal.", "number_input", min_value=0.0, value=0.0, format="%.6e", key="fall_time")
+    cursor_pre = setting_row("Pre cursors", "Number of pre-cursor UI samples to report.", "number_input", min_value=0, value=5, step=1, key="cursor_pre")
+    cursor_post = setting_row("Post cursors", "Number of post-cursor UI samples to report.", "number_input", min_value=0, value=10, step=1, key="cursor_post")
+    time_unit = setting_row("Time unit", "Horizontal unit used in the pulse plot.", "selectbox", options=["UI", "s"], key="time_unit")
+    decimal_places = setting_row("Display decimals", "Decimal places used in result tables.", "number_input", min_value=1, max_value=15, value=6, step=1, key="decimal_places")
 
     st.subheader("Equalizer")
-    eq_columns = st.columns(3)
-    ctle_db = eq_columns[0].number_input("CTLE boost [dB]", min_value=0.0, value=0.0)
-    eq_mode_label = eq_columns[1].selectbox("EQ mode", ["None", "FFE", "DFE", "FFE + DFE"], index=2)
+    eq_mode_label = setting_row("EQ mode", "Select the equalizer stages to recommend and apply.", "selectbox", options=["None", "FFE", "DFE", "FFE + DFE"], index=2, key="eq_mode")
     eq_mode = {"None": "NONE", "FFE": "FFE", "DFE": "DFE", "FFE + DFE": "BOTH"}[eq_mode_label]
-    stop_improvement = eq_columns[2].number_input("Tap stop improvement [%]", min_value=0.0, value=1.0)
-    tap_columns = st.columns(4)
-    ffe_pre = tap_columns[0].number_input("FFE max pre taps", min_value=0, value=3, step=1)
-    ffe_post = tap_columns[1].number_input("FFE max post taps", min_value=0, value=5, step=1)
-    ffe_limit = tap_columns[2].number_input("FFE sum(abs) limit", min_value=0.001, value=1.0)
-    dfe_taps = tap_columns[3].number_input("DFE max taps", min_value=0, value=8, step=1)
-
-    st.subheader("Graph Options")
-    graph_columns = st.columns(6)
-    show_tx_pulse = graph_columns[0].checkbox("TX pulse", value=True)
-    show_ffe_output = graph_columns[1].checkbox("FFE output", value=True)
-    show_channel = graph_columns[2].checkbox("Channel", value=True)
-    show_after_ffe = graph_columns[3].checkbox("FFE + Channel", value=True)
-    show_after_ctle = graph_columns[4].checkbox("FFE + Channel + CTLE", value=True)
-    show_after_dfe = graph_columns[5].checkbox("FFE + Channel + CTLE + DFE", value=True)
-    show_samples = st.checkbox("Sample markers (1 UI interval)", value=True)
+    ctle_db = setting_row("CTLE boost [dB]", "High-frequency boost; zero disables CTLE.", "number_input", min_value=0.0, value=0.0, key="ctle_db")
+    if eq_mode in {"FFE", "BOTH"}:
+        ffe_pre = setting_row("FFE max pre taps", "Maximum number of FFE pre-cursor taps.", "number_input", min_value=0, value=3, step=1, key="ffe_pre")
+        ffe_post = setting_row("FFE max post taps", "Maximum number of FFE post-cursor taps.", "number_input", min_value=0, value=5, step=1, key="ffe_post")
+        ffe_limit = setting_row("FFE sum(abs) limit", "Maximum absolute sum of all TX FFE taps.", "number_input", min_value=0.001, value=1.0, key="ffe_limit")
+    else:
+        ffe_pre, ffe_post, ffe_limit = 3, 5, 1.0
+    if eq_mode in {"DFE", "BOTH"}:
+        dfe_taps = setting_row("DFE max taps", "Maximum number of DFE post-cursor taps.", "number_input", min_value=0, value=8, step=1, key="dfe_taps")
+    else:
+        dfe_taps = 8
+    if eq_mode != "NONE":
+        stop_improvement = setting_row("Tap stop improvement [%]", "Stop adding taps below this incremental improvement.", "number_input", min_value=0.0, value=1.0, key="stop_improvement")
+    else:
+        stop_improvement = 1.0
 
     submitted = st.button("Run Analysis", type="primary", use_container_width=True)
 
@@ -228,13 +344,6 @@ settings = {
     "ffe_post": ffe_post,
     "ffe_limit": ffe_limit,
     "dfe_taps": dfe_taps,
-    "show_tx_pulse": show_tx_pulse,
-    "show_ffe_output": show_ffe_output,
-    "show_channel": show_channel,
-    "show_after_ffe": show_after_ffe,
-    "show_after_ctle": show_after_ctle,
-    "show_after_dfe": show_after_dfe,
-    "show_samples": show_samples,
 }
 
 if submitted:
@@ -254,13 +363,58 @@ if results:
         ["Pulse Response", "Magnitude", "Cursor Results", "EQ Taps"]
     )
     with pulse_tab:
-        st.image(results["pulse"], use_container_width=True)
+        plot_context = results["plot_context"]
+        result_mode = str(plot_context["eq_mode"])
+        ctle_enabled = float(plot_context["ctle_db"]) > 0.0
+        ffe_enabled = result_mode in {"FFE", "BOTH"}
+        dfe_enabled = result_mode in {"DFE", "BOTH"}
+
+        st.markdown("**Graph Options**")
+        graph_items = [
+            ("tx", "TX pulse"),
+            ("channel", "Channel"),
+        ]
+        if ffe_enabled:
+            graph_items.insert(1, ("ffe_output", "FFE output"))
+            graph_items.append(("after_ffe", "FFE + Channel"))
+        if ctle_enabled:
+            ctle_label = "FFE + Channel + CTLE" if ffe_enabled else "Channel + CTLE"
+            graph_items.append(("after_ctle", ctle_label))
+        if dfe_enabled:
+            prefix = "FFE + Channel" if ffe_enabled else "Channel"
+            if ctle_enabled:
+                prefix += " + CTLE"
+            graph_items.append(("after_dfe", f"{prefix} + DFE"))
+
+        graph_values = {
+            "tx": False,
+            "ffe_output": False,
+            "channel": False,
+            "after_ffe": False,
+            "after_ctle": False,
+            "after_dfe": False,
+        }
+        graph_columns = st.columns(len(graph_items))
+        for column, (key, label) in zip(graph_columns, graph_items):
+            graph_values[key] = column.checkbox(label, value=True, key=f"result_graph_{key}")
+        graph_values["samples"] = st.checkbox(
+            "Sample markers (1 UI interval)", value=True, key="result_graph_samples"
+        )
+
+        display_pulse = render_session_pulse(results, graph_values)
+        st.image(display_pulse, use_container_width=True)
     with magnitude_tab:
         st.image(results["magnitude"], use_container_width=True)
     with cursor_tab:
-        st.dataframe(csv_rows(results["cursors"]), use_container_width=True, hide_index=True)
+        cursor_display = fixed_decimal_csv(
+            results["cursors"], int(results["plot_context"]["decimal_places"])
+        )
+        st.dataframe(csv_rows(cursor_display), use_container_width=True, hide_index=True)
     with tap_tab:
-        st.dataframe(csv_rows(results["taps"]), use_container_width=True, hide_index=True)
+        tap_display = fixed_decimal_csv(
+            results["taps"], int(results["plot_context"]["decimal_places"])
+        )
+        st.dataframe(csv_rows(tap_display), use_container_width=True, hide_index=True)
 
     st.subheader("Save Options")
     save_columns = st.columns(4)
@@ -271,7 +425,9 @@ if results:
         "taps": save_columns[3].checkbox("EQ Taps CSV", value=True),
     }
     if any(save_selection.values()):
-        download_zip = selected_results_zip(results, save_selection)
+        download_results = dict(results)
+        download_results["pulse"] = display_pulse
+        download_zip = selected_results_zip(download_results, save_selection)
         st.download_button(
             "Download Selected Results",
             data=download_zip,
