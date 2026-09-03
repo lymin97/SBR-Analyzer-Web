@@ -8,6 +8,7 @@ import io
 import re
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
 
 import streamlit as st
@@ -34,6 +35,29 @@ ANALYSIS_LOCK = shared_analysis_lock()
 def csv_rows(data: bytes) -> list[dict[str, str]]:
     text = data.decode("utf-8-sig")
     return list(csv.DictReader(io.StringIO(text)))
+
+
+def safe_download_name(name: str) -> str:
+    """Return a filesystem-friendly base name for downloaded results."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name.strip())
+    cleaned = cleaned.rstrip(" .")
+    return cleaned or "sbr_analysis"
+
+
+def selected_results_zip(results: dict[str, object], base_name: str, selected: dict[str, bool]) -> bytes:
+    """Package the selected result files into one in-memory ZIP archive."""
+    filenames = {
+        "pulse": f"{base_name}_pulse.png",
+        "magnitude": f"{base_name}_magnitude.png",
+        "cursors": f"{base_name}_cursors.csv",
+        "taps": f"{base_name}_eq_taps.csv",
+    }
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for key, enabled in selected.items():
+            if enabled:
+                bundle.writestr(filenames[key], results[key])
+    return archive.getvalue()
 
 
 def configure_analyzer(settings: dict[str, object], input_path: Path, output_path: Path) -> None:
@@ -221,18 +245,36 @@ if results:
     )
     with pulse_tab:
         st.image(results["pulse"], use_container_width=True)
-        st.download_button("Download Pulse PNG", results["pulse"], "sbr_analysis_pulse.png", "image/png")
     with magnitude_tab:
         st.image(results["magnitude"], use_container_width=True)
-        st.download_button(
-            "Download Magnitude PNG", results["magnitude"], "sbr_analysis_magnitude.png", "image/png"
-        )
     with cursor_tab:
         st.dataframe(csv_rows(results["cursors"]), use_container_width=True, hide_index=True)
-        st.download_button("Download Cursor CSV", results["cursors"], "sbr_analysis_cursors.csv", "text/csv")
     with tap_tab:
         st.dataframe(csv_rows(results["taps"]), use_container_width=True, hide_index=True)
-        st.download_button("Download EQ Taps CSV", results["taps"], "sbr_analysis_eq_taps.csv", "text/csv")
+
+    st.subheader("Save Options")
+    download_base_name = safe_download_name(
+        st.text_input("File name", value="sbr_analysis", key="download_base_name")
+    )
+    save_columns = st.columns(4)
+    save_selection = {
+        "pulse": save_columns[0].checkbox("Pulse PNG", value=True),
+        "magnitude": save_columns[1].checkbox("Magnitude PNG", value=True),
+        "cursors": save_columns[2].checkbox("Cursor CSV", value=True),
+        "taps": save_columns[3].checkbox("EQ Taps CSV", value=True),
+    }
+    if any(save_selection.values()):
+        download_zip = selected_results_zip(results, download_base_name, save_selection)
+        st.download_button(
+            "Download Selected Results",
+            data=download_zip,
+            file_name=f"{download_base_name}.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True,
+        )
+    else:
+        st.warning("Select at least one result to download.")
 
     with st.expander("Run Log"):
         st.code(results["log"] or "Analysis completed.", language="text")
