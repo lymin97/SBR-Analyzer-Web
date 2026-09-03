@@ -177,6 +177,7 @@ def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object
         return payload
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
 def render_session_pulse(results: dict[str, object], options: dict[str, bool]) -> bytes:
     """Redraw one session's cached pulse data without repeating channel analysis."""
     with ANALYSIS_LOCK, tempfile.TemporaryDirectory(prefix="sbr_plot_") as temporary:
@@ -299,9 +300,9 @@ with st.container(border=True):
     decimal_places = setting_row("Display decimals", "Decimal places used in result tables.", "number_input", min_value=1, max_value=15, value=6, step=1, key="decimal_places")
 
     st.subheader("Equalizer")
+    ctle_db = setting_row("CTLE boost [dB]", "High-frequency boost; zero disables CTLE.", "number_input", min_value=0.0, value=0.0, key="ctle_db")
     eq_mode_label = setting_row("EQ mode", "Select the equalizer stages to recommend and apply.", "selectbox", options=["None", "FFE", "DFE", "FFE + DFE"], index=2, key="eq_mode")
     eq_mode = {"None": "NONE", "FFE": "FFE", "DFE": "DFE", "FFE + DFE": "BOTH"}[eq_mode_label]
-    ctle_db = setting_row("CTLE boost [dB]", "High-frequency boost; zero disables CTLE.", "number_input", min_value=0.0, value=0.0, key="ctle_db")
     if eq_mode in {"FFE", "BOTH"}:
         ffe_pre = setting_row("FFE max pre taps", "Maximum number of FFE pre-cursor taps.", "number_input", min_value=0, value=3, step=1, key="ffe_pre")
         ffe_post = setting_row("FFE max post taps", "Maximum number of FFE post-cursor taps.", "number_input", min_value=0, value=5, step=1, key="ffe_post")
