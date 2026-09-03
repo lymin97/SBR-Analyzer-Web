@@ -37,20 +37,13 @@ def csv_rows(data: bytes) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(text)))
 
 
-def safe_download_name(name: str) -> str:
-    """Return a filesystem-friendly base name for downloaded results."""
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name.strip())
-    cleaned = cleaned.rstrip(" .")
-    return cleaned or "sbr_analysis"
-
-
-def selected_results_zip(results: dict[str, object], base_name: str, selected: dict[str, bool]) -> bytes:
+def selected_results_zip(results: dict[str, object], selected: dict[str, bool]) -> bytes:
     """Package the selected result files into one in-memory ZIP archive."""
     filenames = {
-        "pulse": f"{base_name}_pulse.png",
-        "magnitude": f"{base_name}_magnitude.png",
-        "cursors": f"{base_name}_cursors.csv",
-        "taps": f"{base_name}_eq_taps.csv",
+        "pulse": "sbr_analysis_pulse.png",
+        "magnitude": "sbr_analysis_magnitude.png",
+        "cursors": "sbr_analysis_cursors.csv",
+        "taps": "sbr_analysis_eq_taps.csv",
     }
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -90,13 +83,13 @@ def configure_analyzer(settings: dict[str, object], input_path: Path, output_pat
     analyzer.DISPLAY_DECIMAL_PLACES = int(settings["decimal_places"])
     analyzer.SAVE_RESULT_CSV = True
     analyzer.SAVE_PLOT_PNG = True
-    analyzer.SHOW_TX_PULSE = True
-    analyzer.SHOW_FFE_OUTPUT = True
-    analyzer.SHOW_CHANNEL = True
-    analyzer.SHOW_AFTER_FFE = True
-    analyzer.SHOW_AFTER_CTLE = True
-    analyzer.SHOW_AFTER_DFE = True
-    analyzer.SHOW_SAMPLES = True
+    analyzer.SHOW_TX_PULSE = bool(settings["show_tx_pulse"])
+    analyzer.SHOW_FFE_OUTPUT = bool(settings["show_ffe_output"])
+    analyzer.SHOW_CHANNEL = bool(settings["show_channel"])
+    analyzer.SHOW_AFTER_FFE = bool(settings["show_after_ffe"])
+    analyzer.SHOW_AFTER_CTLE = bool(settings["show_after_ctle"])
+    analyzer.SHOW_AFTER_DFE = bool(settings["show_after_dfe"])
+    analyzer.SHOW_SAMPLES = bool(settings["show_samples"])
 
 
 def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object]:
@@ -198,6 +191,16 @@ with st.container(border=True):
     ffe_limit = tap_columns[2].number_input("FFE sum(abs) limit", min_value=0.001, value=1.0)
     dfe_taps = tap_columns[3].number_input("DFE max taps", min_value=0, value=8, step=1)
 
+    st.subheader("Graph Options")
+    graph_columns = st.columns(6)
+    show_tx_pulse = graph_columns[0].checkbox("TX pulse", value=True)
+    show_ffe_output = graph_columns[1].checkbox("FFE output", value=True)
+    show_channel = graph_columns[2].checkbox("Channel", value=True)
+    show_after_ffe = graph_columns[3].checkbox("FFE + Channel", value=True)
+    show_after_ctle = graph_columns[4].checkbox("FFE + Channel + CTLE", value=True)
+    show_after_dfe = graph_columns[5].checkbox("FFE + Channel + CTLE + DFE", value=True)
+    show_samples = st.checkbox("Sample markers (1 UI interval)", value=True)
+
     submitted = st.button("Run Analysis", type="primary", use_container_width=True)
 
 settings = {
@@ -225,6 +228,13 @@ settings = {
     "ffe_post": ffe_post,
     "ffe_limit": ffe_limit,
     "dfe_taps": dfe_taps,
+    "show_tx_pulse": show_tx_pulse,
+    "show_ffe_output": show_ffe_output,
+    "show_channel": show_channel,
+    "show_after_ffe": show_after_ffe,
+    "show_after_ctle": show_after_ctle,
+    "show_after_dfe": show_after_dfe,
+    "show_samples": show_samples,
 }
 
 if submitted:
@@ -253,9 +263,6 @@ if results:
         st.dataframe(csv_rows(results["taps"]), use_container_width=True, hide_index=True)
 
     st.subheader("Save Options")
-    download_base_name = safe_download_name(
-        st.text_input("File name", value="sbr_analysis", key="download_base_name")
-    )
     save_columns = st.columns(4)
     save_selection = {
         "pulse": save_columns[0].checkbox("Pulse PNG", value=True),
@@ -264,11 +271,11 @@ if results:
         "taps": save_columns[3].checkbox("EQ Taps CSV", value=True),
     }
     if any(save_selection.values()):
-        download_zip = selected_results_zip(results, download_base_name, save_selection)
+        download_zip = selected_results_zip(results, save_selection)
         st.download_button(
             "Download Selected Results",
             data=download_zip,
-            file_name=f"{download_base_name}.zip",
+            file_name="sbr_analysis.zip",
             mime="application/zip",
             type="primary",
             use_container_width=True,
