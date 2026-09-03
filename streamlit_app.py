@@ -280,7 +280,7 @@ def interactive_pulse_figure(results: dict[str, object], options: dict[str, bool
         hovermode="x unified",
         legend={"orientation": "v"},
         margin={"l": 55, "r": 25, "t": 55, "b": 50},
-        height=650,
+        height=520,
     )
     figure.update_xaxes(range=x_range, showgrid=True)
     figure.update_yaxes(showgrid=True)
@@ -291,6 +291,11 @@ st.set_page_config(page_title="SBR Analyzer", page_icon="📈", layout="wide")
 st.markdown(
     """
     <style>
+    div[data-testid="stMainBlockContainer"] {
+        max-width: 80vw;
+        margin-left: auto;
+        margin-right: auto;
+    }
     div[data-testid="stNumberInput"] button {
         display: none;
     }
