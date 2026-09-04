@@ -469,6 +469,8 @@ if effective_uploaded is None:
 
 if effective_uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
+else:
+    st.caption(f"Current file: {effective_uploaded.name}")
 
 if effective_uploaded is not None:
     input_signature = (effective_uploaded.name, effective_uploaded.size)
