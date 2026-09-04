@@ -37,6 +37,21 @@ def shared_analysis_lock() -> threading.Lock:
 ANALYSIS_LOCK = shared_analysis_lock()
 
 
+def parse_symbol_rate(value: str) -> float:
+    """Parse a positive Baud value with optional k/K/M/G/T multiplier."""
+    match = re.fullmatch(
+        r"\s*((?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)([kKMGT]?)\s*",
+        value,
+    )
+    if match is None:
+        raise ValueError("Use a number with an optional k, K, M, G, or T suffix (for example 200M or 6G).")
+    multipliers = {"": 1.0, "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12}
+    result = float(match.group(1)) * multipliers[match.group(2)]
+    if not np.isfinite(result) or result <= 0.0:
+        raise ValueError("Symbol rate must be a finite value greater than zero.")
+    return result
+
+
 @contextlib.contextmanager
 def available_analysis_slot():
     """Reject duplicate runs instead of building a CPU-heavy server queue."""
@@ -448,7 +463,17 @@ with st.container(border=True):
     rx_termination = None if matched else float(rx_termination_value)
 
     st.subheader("Signal / Cursor")
-    symbol_rate = setting_row("Symbol rate [Baud]", "Data symbol rate used to define 1 UI.", "number_input", min_value=1.0, value=200.0e6, format="%.6e", key="symbol_rate")
+    symbol_rate_text = setting_row(
+        "Symbol rate [Baud]", "Accepts plain/e notation or k, K, M, G, T suffixes (for example 200M or 6G).",
+        "text_input", value="200M", key="symbol_rate_text",
+    )
+    try:
+        symbol_rate = parse_symbol_rate(symbol_rate_text)
+        symbol_rate_error = None
+    except ValueError as exc:
+        symbol_rate = 1.0
+        symbol_rate_error = str(exc)
+        st.error(f"Symbol rate: {symbol_rate_error}")
     tx_voltage = setting_row("TX pulse [V]", "Transmitted single-bit pulse amplitude.", "number_input", min_value=0.001, value=1.0, key="tx_voltage")
     pulse_width = setting_row("Pulse width [UI]", "Duration of the transmitted pulse in UI.", "number_input", min_value=0.001, value=1.0, key="pulse_width")
     rise_time = setting_row("TX rise time [s]", "Optional transmitter rise time; zero is ideal.", "number_input", min_value=0.0, value=0.0, format="%.6e", key="rise_time")
@@ -479,7 +504,10 @@ with st.container(border=True):
     else:
         stop_improvement = float(st.session_state.get("stop_improvement", 1.0))
 
-    submitted = st.button("Run Analysis", type="primary", use_container_width=True)
+    submitted = st.button(
+        "Run Analysis", type="primary", use_container_width=True,
+        disabled=symbol_rate_error is not None,
+    )
 
 settings = {
     "channel_mode": channel_mode,
@@ -519,7 +547,7 @@ browser_settings = {
     "matched_rx": bool(matched),
     "rx_termination_se": float(st.session_state.get("rx_termination_se", 50.0)),
     "rx_termination_diff": float(st.session_state.get("rx_termination_diff", 100.0)),
-    "symbol_rate": float(symbol_rate),
+    "symbol_rate_text": symbol_rate_text,
     "tx_voltage": float(tx_voltage),
     "pulse_width": float(pulse_width),
     "rise_time": float(rise_time),
