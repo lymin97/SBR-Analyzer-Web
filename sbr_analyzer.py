@@ -537,8 +537,25 @@ def main():
     nyquist = SYMBOL_RATE_BAUD / 2.0
     ts = read_touchstone(S_PARAMETER_FILE)
     transfer, channel_reference_ohm, load_gamma = selected_transfer(ts)
-    if ts.frequency_hz[-1] < nyquist:
-        print("WARNING: S-parameter maximum frequency is below Nyquist.")
+    channel_fmax = float(ts.frequency_hz[-1])
+    if channel_fmax < nyquist:
+        raise ValueError(
+            "Touchstone bandwidth is below Nyquist and cannot support the requested analysis: "
+            f"fmax={channel_fmax:.6E} Hz, Nyquist={nyquist:.6E} Hz."
+        )
+    if channel_fmax < SYMBOL_RATE_BAUD:
+        raise ValueError(
+            "Touchstone bandwidth does not reach the first pulse spectral null: "
+            f"fmax={channel_fmax:.6E} Hz, required={SYMBOL_RATE_BAUD:.6E} Hz "
+            "(the symbol rate)."
+        )
+    if channel_fmax < 2.0 * SYMBOL_RATE_BAUD:
+        print(
+            "WARNING: Limited Touchstone harmonic bandwidth: "
+            f"fmax={channel_fmax:.6E} Hz; at least "
+            f"{2.0 * SYMBOL_RATE_BAUD:.6E} Hz (2 x symbol rate) is recommended. "
+            "High-frequency truncation may introduce pulse ringing and cursor error."
+        )
     if ts.frequency_hz[0] > 0:
         print("WARNING: DC is absent; the lowest-frequency value is extended to DC.")
 

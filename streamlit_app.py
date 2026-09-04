@@ -204,8 +204,14 @@ def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object
             "cursors": "cursor_results.csv",
             "taps": "equalizer_taps.csv",
         }
+        log_text = log.getvalue()
         payload: dict[str, object] = {
-            "log": log.getvalue(),
+            "log": log_text,
+            "warnings": [
+                line.removeprefix("WARNING:").strip()
+                for line in log_text.splitlines()
+                if line.startswith("WARNING:")
+            ],
             "input_name": input_name,
             "plot_cache": copy.deepcopy(analyzer.PULSE_PLOT_CACHE),
             "plot_context": {
@@ -690,6 +696,8 @@ if submitted:
 
 results = st.session_state.get("analysis_results")
 if results:
+    for analysis_warning in results.get("warnings", []):
+        st.warning(analysis_warning)
     st.divider()
     st.subheader(f"Results · {results['input_name']}")
     pulse_tab, magnitude_tab, cursor_tab, tap_tab = st.tabs(
