@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import base64
 import csv
 import io
 import json
@@ -16,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_js_eval import streamlit_js_eval
 
 import sbr_analyzer as analyzer
@@ -26,6 +28,22 @@ __version__ = "1.0.0"
 
 APP_DIRECTORY = Path(__file__).resolve().parent
 SAMPLE_FILE = APP_DIRECTORY / "sample_diff_channel_200Mbaud_minus6dB_at_nyquist.s4p"
+BROWSER_FILE_CACHE = components.declare_component(
+    "sbr_browser_file_cache", path=str(APP_DIRECTORY / "browser_file_cache")
+)
+
+
+class RestoredUpload:
+    """Small UploadedFile-compatible wrapper for a browser-restored file."""
+
+    def __init__(self, name: str, data: bytes, mime: str = "application/octet-stream"):
+        self.name = Path(name).name
+        self.type = mime
+        self._data = data
+        self.size = len(data)
+
+    def getvalue(self) -> bytes:
+        return self._data
 
 
 @st.cache_resource
@@ -357,6 +375,26 @@ if not st.session_state.get("browser_settings_loaded", False):
     st.session_state["browser_settings_loaded"] = True
     st.rerun()
 
+if "browser_upload_loaded" not in st.session_state:
+    cached_upload = BROWSER_FILE_CACHE(
+        action="load", default={"pending": True}, key="load_browser_upload"
+    )
+    if isinstance(cached_upload, dict) and cached_upload.get("pending"):
+        st.stop()
+    restored_upload = None
+    if isinstance(cached_upload, dict) and not cached_upload.get("error"):
+        try:
+            restored_upload = {
+                "name": Path(str(cached_upload["name"])).name,
+                "mime": str(cached_upload.get("mime", "application/octet-stream")),
+                "data": base64.b64decode(cached_upload["data"], validate=True),
+            }
+        except (KeyError, TypeError, ValueError):
+            restored_upload = None
+    st.session_state["browser_uploaded_file"] = restored_upload
+    st.session_state["browser_upload_loaded"] = True
+    st.rerun()
+
 st.markdown(
     """
     <style>
@@ -397,17 +435,47 @@ st.info(
 )
 
 uploaded = st.file_uploader(
-    "Touchstone S-parameter file",
+    "Touchstone S-parameter file", key="touchstone_upload",
     help=("Click Browse files or drag and drop any .sNp Touchstone file. "
           "If omitted, the included 200 MBaud differential sample is used."),
 )
-if uploaded is None:
+if uploaded is None and st.session_state.get("uploader_had_file", False):
+    st.session_state["browser_uploaded_file"] = None
+    st.session_state["uploader_had_file"] = False
+    BROWSER_FILE_CACHE(action="clear", default=None, key="clear_browser_upload")
+elif uploaded is not None:
+    st.session_state["uploader_had_file"] = True
+    upload_bytes = uploaded.getvalue()
+    upload_signature = (Path(uploaded.name).name, len(upload_bytes), hash(upload_bytes))
+    if st.session_state.get("stored_upload_signature") != upload_signature:
+        st.session_state["browser_uploaded_file"] = {
+            "name": Path(uploaded.name).name,
+            "mime": getattr(uploaded, "type", "application/octet-stream"),
+            "data": upload_bytes,
+        }
+        st.session_state["stored_upload_signature"] = upload_signature
+        BROWSER_FILE_CACHE(
+            action="store",
+            file_name=Path(uploaded.name).name,
+            file_type=getattr(uploaded, "type", "application/octet-stream"),
+            file_b64=base64.b64encode(upload_bytes).decode("ascii"),
+            default=None,
+            key=f"store_browser_upload_{abs(hash(upload_signature))}",
+        )
+
+effective_uploaded = uploaded
+if effective_uploaded is None:
+    cached = st.session_state.get("browser_uploaded_file")
+    if isinstance(cached, dict):
+        effective_uploaded = RestoredUpload(cached["name"], cached["data"], cached["mime"])
+
+if effective_uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 
-if uploaded is not None:
-    input_signature = (uploaded.name, uploaded.size)
-if uploaded is not None and st.session_state.get("detected_input_signature") != input_signature:
-    suffix = Path(uploaded.name).suffix.lower()
+if effective_uploaded is not None:
+    input_signature = (effective_uploaded.name, effective_uploaded.size)
+if effective_uploaded is not None and st.session_state.get("detected_input_signature") != input_signature:
+    suffix = Path(effective_uploaded.name).suffix.lower()
     if suffix == ".s2p":
         st.session_state["channel_mode"] = "Single-ended"
     elif suffix == ".s4p":
@@ -577,7 +645,7 @@ streamlit_js_eval(
 if submitted:
     try:
         with st.spinner("Analyzing channel..."):
-            st.session_state["analysis_results"] = run_analysis(uploaded, settings)
+            st.session_state["analysis_results"] = run_analysis(effective_uploaded, settings)
         st.success("Analysis completed.")
     except Exception as exc:
         st.session_state.pop("analysis_results", None)
