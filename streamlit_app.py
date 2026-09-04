@@ -6,6 +6,7 @@ import contextlib
 import copy
 import base64
 import csv
+import html
 import io
 import json
 import re
@@ -471,9 +472,16 @@ if effective_uploaded is None:
 if effective_uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 else:
-    current_file_column, example_button_column = st.columns([5, 1], vertical_alignment="center")
-    current_file_column.caption(f"Current file: {effective_uploaded.name}")
-    if example_button_column.button("Use example", key="use_example_file", use_container_width=True):
+    st.markdown(
+        '<p style="font-size:0.875rem;color:rgba(49,51,63,0.6);margin:0.25rem 0 0.5rem 0;">'
+        f'Current file: {html.escape(effective_uploaded.name)}&nbsp; '
+        '<a href="?use_example=1" style="color:inherit;text-decoration:underline;">Use example</a>'
+        '</p>',
+        unsafe_allow_html=True,
+    )
+
+if st.query_params.get("use_example") == "1":
+    if not st.session_state.get("clear_upload_request"):
         st.session_state["clear_upload_request"] = int(
             st.session_state.get("clear_upload_request", 0)
         ) + 1
@@ -491,6 +499,7 @@ if st.session_state.get("clear_upload_request"):
         st.session_state.pop("detected_input_signature", None)
         st.session_state.pop("analysis_results", None)
         st.session_state.pop("clear_upload_request", None)
+        st.query_params.clear()
         st.rerun()
 
 if effective_uploaded is not None:
