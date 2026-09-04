@@ -37,6 +37,17 @@ def shared_analysis_lock() -> threading.Lock:
 ANALYSIS_LOCK = shared_analysis_lock()
 
 
+@contextlib.contextmanager
+def available_analysis_slot():
+    """Reject duplicate runs instead of building a CPU-heavy server queue."""
+    if not ANALYSIS_LOCK.acquire(blocking=False):
+        raise RuntimeError("Another analysis is already running. Wait for it to finish and try again.")
+    try:
+        yield
+    finally:
+        ANALYSIS_LOCK.release()
+
+
 def setting_row(label: str, description: str, widget: str, **kwargs):
     """Render one setting per row with a short muted description."""
     label_column, input_column, help_column = st.columns([1.15, 1.35, 2.5], vertical_alignment="center")
@@ -137,7 +148,7 @@ def configure_analyzer(settings: dict[str, object], input_path: Path, output_pat
 
 
 def run_analysis(uploaded_file, settings: dict[str, object]) -> dict[str, object]:
-    with ANALYSIS_LOCK, tempfile.TemporaryDirectory(prefix="sbr_web_") as temporary:
+    with available_analysis_slot(), tempfile.TemporaryDirectory(prefix="sbr_web_") as temporary:
         work = Path(temporary)
         if uploaded_file is None:
             input_path = SAMPLE_FILE

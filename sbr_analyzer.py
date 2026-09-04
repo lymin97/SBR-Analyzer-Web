@@ -201,26 +201,30 @@ def selected_transfer(ts: Touchstone) -> tuple[np.ndarray, float, complex]:
 
 
 def ctle_breakpoints(boost_db: float, nyquist_hz: float):
-    """Return Z1/P1/P2 so gain and its maximum occur at Nyquist.
+    """Return Z1/P1/P2 with the requested gain occurring at Nyquist.
 
-    P1 is anchored at Nyquist/3. Z1 and P2 are solved from the requested
-    Nyquist gain and the zero-slope condition at Nyquist.
+    P1 is anchored at Nyquist and P2 at twice P1 for harmonic roll-off.
+    Z1 is solved so the CTLE gain at Nyquist equals ``boost_db``. The CTLE
+    peak is not constrained to occur at Nyquist.
     """
     if abs(boost_db) < 1e-12:
         return None
     gain = 10.0 ** (boost_db / 20.0)
     if gain <= 1.0:
         raise ValueError("Automatic Z1/P1/P2 CTLE requires CTLE_DB >= 0; use 0 for OFF.")
-    p1_hz = nyquist_hz / 3.0
-    p2_ratio_squared = (1.0 - 1.0 / (gain * gain)) / 9.0
-    p2_hz = nyquist_hz / math.sqrt(p2_ratio_squared)
-    z1_ratio_squared = 10.0 * gain * gain * (1.0 + p2_ratio_squared) - 1.0
+    p1_hz = nyquist_hz
+    p2_hz = 2.0 * p1_hz
+    p1_ratio_squared = (nyquist_hz / p1_hz) ** 2
+    p2_ratio_squared = (nyquist_hz / p2_hz) ** 2
+    z1_ratio_squared = (
+        gain * gain * (1.0 + p1_ratio_squared) * (1.0 + p2_ratio_squared) - 1.0
+    )
     z1_hz = nyquist_hz / math.sqrt(z1_ratio_squared)
     return z1_hz, p1_hz, p2_hz
 
 
 def ctle_response(frequency_hz: np.ndarray, boost_db: float, nyquist_hz: float) -> np.ndarray:
-    """Z1/P1/P2 CTLE: DC=0 dB, peak at Nyquist, -20 dB/dec after P2."""
+    """Z1/P1/P2 CTLE: DC=0 dB, target gain at Nyquist, roll-off after P2."""
     breakpoints = ctle_breakpoints(boost_db, nyquist_hz)
     if breakpoints is None:
         return np.ones_like(frequency_hz, dtype=complex)
@@ -435,26 +439,38 @@ def render_cached_pulse_plot(path: Path) -> None:
     mode = cache["mode"]
     ctle_enabled = cache["ctle_enabled"]
     x_time = (time - main_index * dt) / ui if TIME_AXIS_UNIT.upper() == "UI" else time - main_index * dt
+    if TIME_AXIS_UNIT.upper() == "UI":
+        x_limits = (-max(CURSOR_PRE_COUNT + 1, 2), CURSOR_POST_COUNT + 1)
+    else:
+        x_limits = (-max(CURSOR_PRE_COUNT + 1, 2) * ui, (CURSOR_POST_COUNT + 1) * ui)
+    visible = np.flatnonzero((x_time >= x_limits[0]) & (x_time <= x_limits[1]))
+    plot_x = x_time[visible]
 
     fig, ax_wave = plt.subplots(figsize=(11, 6), constrained_layout=True)
     if SHOW_TX_PULSE:
-        ax_wave.plot(x_time, np.roll(cache["tx"], main_index), label="TX pulse (1 UI)", lw=1.5)
+        tx_aligned = np.roll(cache["tx"], main_index)
+        ax_wave.plot(plot_x, tx_aligned[visible], label="TX pulse (1 UI)", lw=1.5)
     if mode in {"FFE", "BOTH"} and SHOW_FFE_OUTPUT:
         ax_wave.plot(
-            x_time, cache["tx_after_ffe"], label="FFE output",
+            plot_x, cache["tx_after_ffe"][visible], label="FFE output",
             color="tab:cyan", lw=1.5, linestyle="--",
         )
 
     sample_positions = cache["positions"]
 
     def plot_rx(wave, label, color, lw=1.6, alpha=1.0):
-        marker_options = {
-            "marker": "o",
-            "markevery": sample_positions,
-            "markersize": 4.5,
-            "markeredgewidth": 0.8,
-        } if SHOW_SAMPLES else {}
-        ax_wave.plot(x_time, wave, label=label, color=color, lw=lw, alpha=alpha, **marker_options)
+        ax_wave.plot(plot_x, wave[visible], label=label, color=color, lw=lw, alpha=alpha)
+        if SHOW_SAMPLES:
+            markers = sample_positions[
+                (sample_positions >= 0)
+                & (sample_positions < len(wave))
+                & (x_time[sample_positions] >= x_limits[0])
+                & (x_time[sample_positions] <= x_limits[1])
+            ]
+            ax_wave.scatter(
+                x_time[markers], wave[markers], color=color, s=22,
+                linewidths=0.8, zorder=3,
+            )
 
     if SHOW_CHANNEL:
         plot_rx(cache["rx_channel"], "RX: Channel", "tab:orange", lw=1.45, alpha=0.75)
@@ -469,8 +485,7 @@ def render_cached_pulse_plot(path: Path) -> None:
         else:
             dfe_label = "RX: Channel + CTLE + DFE" if ctle_enabled else "RX: Channel + DFE"
         plot_rx(cache["rx_after_dfe"], dfe_label, "tab:red", lw=1.8)
-    if TIME_AXIS_UNIT.upper() == "UI":
-        ax_wave.set_xlim(-max(CURSOR_PRE_COUNT + 1, 2), CURSOR_POST_COUNT + 1)
+    ax_wave.set_xlim(*x_limits)
     ax_wave.set_xlabel("Time [UI]" if TIME_AXIS_UNIT.upper() == "UI" else "Time [s]")
     ax_wave.set_ylabel("Differential voltage [V]" if cache["channel_mode"] == "DIFF" else "Voltage [V]")
     ax_wave.grid(True, alpha=0.3)
@@ -539,9 +554,12 @@ def main():
     rx_channel = fftconvolve(impulse, tx, mode="full")[:len(time)]
 
     ctle = ctle_response(f_bins, CTLE_DB, nyquist)
-    impulse_ctle = np.fft.irfft(base_spectrum * ctle, n=len(time))
-    impulse_ctle = np.pad(impulse_ctle, (alignment_samples, 0))[:len(impulse_ctle)]
-    rx_channel_ctle = fftconvolve(impulse_ctle, tx, mode="full")[:len(time)]
+    if abs(CTLE_DB) < 1e-12:
+        rx_channel_ctle = rx_channel.copy()
+    else:
+        impulse_ctle = np.fft.irfft(base_spectrum * ctle, n=len(time))
+        impulse_ctle = np.pad(impulse_ctle, (alignment_samples, 0))[:len(impulse_ctle)]
+        rx_channel_ctle = fftconvolve(impulse_ctle, tx, mode="full")[:len(time)]
     k, cursors, positions, main_index = extract_cursors(rx_channel_ctle, dt, ui)
     main_pos = int(np.where(k == 0)[0][0])
     before_metric = isi_metric(cursors, main_pos)
@@ -684,11 +702,11 @@ def main():
     magnitude_floor = 1e-15
 
     fig_bode, ax_mag = plt.subplots(figsize=(11, 6), constrained_layout=True)
-    bode_items = [(bode_channel, "Loaded channel transfer")]
+    bode_items = [(bode_channel, "Channel transfer")]
     if abs(CTLE_DB) >= 1e-12:
         bode_items.extend([
-            (bode_ctle, f"CTLE ({CTLE_DB:g} dB target)"),
-            (bode_composite, "Loaded channel + CTLE compensation"),
+            (bode_ctle, f"CTLE ({CTLE_DB:g} dB at Nyquist)"),
+            (bode_composite, "Channel + CTLE compensation"),
         ])
     for response, label in bode_items:
         ax_mag.semilogx(
