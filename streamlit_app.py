@@ -432,8 +432,9 @@ st.info(
     "Do not upload confidential channel data to a public deployment."
 )
 
+uploader_generation = int(st.session_state.get("uploader_generation", 0))
 uploaded = st.file_uploader(
-    "Touchstone S-parameter file", key="touchstone_upload",
+    "Touchstone S-parameter file", key=f"touchstone_upload_{uploader_generation}",
     help=("Click Browse files or drag and drop any .sNp Touchstone file. "
           "If omitted, the included 200 MBaud differential sample is used."),
 )
@@ -470,7 +471,27 @@ if effective_uploaded is None:
 if effective_uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 else:
-    st.caption(f"Current file: {effective_uploaded.name}")
+    current_file_column, example_button_column = st.columns([5, 1], vertical_alignment="center")
+    current_file_column.caption(f"Current file: {effective_uploaded.name}")
+    if example_button_column.button("Use example", key="use_example_file", use_container_width=True):
+        st.session_state["clear_upload_request"] = int(
+            st.session_state.get("clear_upload_request", 0)
+        ) + 1
+
+if st.session_state.get("clear_upload_request"):
+    clear_request = int(st.session_state["clear_upload_request"])
+    clear_result = BROWSER_FILE_CACHE(
+        action="clear", default=None, key=f"explicit_clear_upload_{clear_request}"
+    )
+    if isinstance(clear_result, dict) and clear_result.get("ok"):
+        st.session_state["browser_uploaded_file"] = None
+        st.session_state["uploader_had_file"] = False
+        st.session_state["uploader_generation"] = uploader_generation + 1
+        st.session_state.pop("stored_upload_signature", None)
+        st.session_state.pop("detected_input_signature", None)
+        st.session_state.pop("analysis_results", None)
+        st.session_state.pop("clear_upload_request", None)
+        st.rerun()
 
 if effective_uploaded is not None:
     input_signature = (effective_uploaded.name, effective_uploaded.size)
