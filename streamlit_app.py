@@ -379,21 +379,19 @@ if "browser_upload_loaded" not in st.session_state:
     cached_upload = BROWSER_FILE_CACHE(
         action="load", default={"pending": True}, key="load_browser_upload"
     )
-    if isinstance(cached_upload, dict) and cached_upload.get("pending"):
-        st.stop()
-    restored_upload = None
-    if isinstance(cached_upload, dict) and not cached_upload.get("error"):
-        try:
-            restored_upload = {
-                "name": Path(str(cached_upload["name"])).name,
-                "mime": str(cached_upload.get("mime", "application/octet-stream")),
-                "data": base64.b64decode(cached_upload["data"], validate=True),
-            }
-        except (KeyError, TypeError, ValueError):
-            restored_upload = None
-    st.session_state["browser_uploaded_file"] = restored_upload
-    st.session_state["browser_upload_loaded"] = True
-    st.rerun()
+    if not (isinstance(cached_upload, dict) and cached_upload.get("pending")):
+        restored_upload = None
+        if isinstance(cached_upload, dict) and not cached_upload.get("error"):
+            try:
+                restored_upload = {
+                    "name": Path(str(cached_upload["name"])).name,
+                    "mime": str(cached_upload.get("mime", "application/octet-stream")),
+                    "data": base64.b64decode(cached_upload["data"], validate=True),
+                }
+            except (KeyError, TypeError, ValueError):
+                restored_upload = None
+        st.session_state["browser_uploaded_file"] = restored_upload
+        st.session_state["browser_upload_loaded"] = True
 
 st.markdown(
     """

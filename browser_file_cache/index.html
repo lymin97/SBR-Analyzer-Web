@@ -1,96 +1,10 @@
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><style>html,body{margin:0;height:0;overflow:hidden}</style></head>
+<head>
+  <meta charset="utf-8">
+  <style>html,body{margin:0;height:0;overflow:hidden}</style>
+</head>
 <body>
-<script>
-const DB_NAME = "sbrAnalyzerBrowserCache";
-const STORE_NAME = "uploads";
-const TOKEN_KEY = "sbrAnalyzerUploadToken";
-
-function send(type, extra = {}) {
-  window.parent.postMessage({isStreamlitMessage: true, type, ...extra}, "*");
-}
-function setValue(value) {
-  send("streamlit:setComponentValue", {value, dataType: "json"});
-}
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, {keyPath: "token"});
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function requestResult(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function token(create) {
-  let value = sessionStorage.getItem(TOKEN_KEY);
-  if (!value && create) {
-    value = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
-    sessionStorage.setItem(TOKEN_KEY, value);
-  }
-  return value;
-}
-async function storeUpload(args) {
-  const db = await openDb();
-  const key = token(true);
-  const transaction = db.transaction(STORE_NAME, "readwrite");
-  transaction.objectStore(STORE_NAME).put({
-    token: key,
-    name: args.file_name,
-    mime: args.file_type || "application/octet-stream",
-    data: args.file_b64,
-    savedAt: Date.now()
-  });
-  await new Promise((resolve, reject) => {
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-  });
-  setValue({ok: true, name: args.file_name});
-}
-async function loadUpload() {
-  const key = token(false);
-  if (!key) { setValue(null); return; }
-  const db = await openDb();
-  const transaction = db.transaction(STORE_NAME, "readonly");
-  const record = await requestResult(transaction.objectStore(STORE_NAME).get(key));
-  setValue(record ? {name: record.name, mime: record.mime, data: record.data} : null);
-}
-async function clearUpload() {
-  const key = token(false);
-  if (key) {
-    const db = await openDb();
-    const transaction = db.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).delete(key);
-    await new Promise((resolve, reject) => {
-      transaction.oncomplete = resolve;
-      transaction.onerror = () => reject(transaction.error);
-    });
-  }
-  sessionStorage.removeItem(TOKEN_KEY);
-  setValue({ok: true});
-}
-window.addEventListener("message", async event => {
-  if (!event.data || event.data.type !== "streamlit:render") return;
-  const args = event.data.args || {};
-  try {
-    if (args.action === "store") await storeUpload(args);
-    else if (args.action === "clear") await clearUpload();
-    else await loadUpload();
-  } catch (error) {
-    setValue({error: String(error)});
-  }
-  send("streamlit:setFrameHeight", {height: 0});
-});
-send("streamlit:componentReady", {apiVersion: 1});
-send("streamlit:setFrameHeight", {height: 0});
-</script>
+  <script src="./index.js"></script>
 </body>
 </html>
