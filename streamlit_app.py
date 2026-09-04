@@ -6,6 +6,7 @@ import contextlib
 import copy
 import csv
 import io
+import json
 import re
 import tempfile
 import threading
@@ -15,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_js_eval import streamlit_js_eval
 
 import sbr_analyzer as analyzer
 
@@ -310,6 +312,25 @@ def interactive_pulse_figure(
 
 
 st.set_page_config(page_title="SBR Analyzer", page_icon="📈", layout="wide")
+
+stored_browser_settings = streamlit_js_eval(
+    js_expressions="window.sessionStorage.getItem('sbrAnalyzerSettings') || '{}'",
+    want_output=True,
+    key="load_browser_settings",
+)
+if not st.session_state.get("browser_settings_loaded", False):
+    if stored_browser_settings is None:
+        st.stop()
+    try:
+        restored_settings = json.loads(stored_browser_settings)
+    except (TypeError, json.JSONDecodeError):
+        restored_settings = {}
+    if isinstance(restored_settings, dict):
+        for restored_key, restored_value in restored_settings.items():
+            st.session_state[restored_key] = restored_value
+    st.session_state["browser_settings_loaded"] = True
+    st.rerun()
+
 st.markdown(
     """
     <style>
@@ -357,11 +378,10 @@ uploaded = st.file_uploader(
 if uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 
-active_input_name = uploaded.name if uploaded is not None else SAMPLE_FILE.name
-active_input_size = uploaded.size if uploaded is not None else SAMPLE_FILE.stat().st_size
-input_signature = (active_input_name, active_input_size)
-if st.session_state.get("detected_input_signature") != input_signature:
-    suffix = Path(active_input_name).suffix.lower()
+if uploaded is not None:
+    input_signature = (uploaded.name, uploaded.size)
+if uploaded is not None and st.session_state.get("detected_input_signature") != input_signature:
+    suffix = Path(uploaded.name).suffix.lower()
     if suffix == ".s2p":
         st.session_state["channel_mode"] = "Single-ended"
     elif suffix == ".s4p":
@@ -436,15 +456,17 @@ with st.container(border=True):
         ffe_post = setting_row("FFE max post taps", "Maximum number of FFE post-cursor taps.", "number_input", min_value=0, value=5, step=1, key="ffe_post")
         ffe_limit = setting_row("FFE sum(abs) limit", "Maximum absolute sum of all TX FFE taps.", "number_input", min_value=0.001, value=1.0, key="ffe_limit")
     else:
-        ffe_pre, ffe_post, ffe_limit = 3, 5, 1.0
+        ffe_pre = int(st.session_state.get("ffe_pre", 3))
+        ffe_post = int(st.session_state.get("ffe_post", 5))
+        ffe_limit = float(st.session_state.get("ffe_limit", 1.0))
     if eq_mode in {"DFE", "BOTH"}:
         dfe_taps = setting_row("DFE max taps", "Maximum number of DFE post-cursor taps.", "number_input", min_value=0, value=8, step=1, key="dfe_taps")
     else:
-        dfe_taps = 8
+        dfe_taps = int(st.session_state.get("dfe_taps", 8))
     if eq_mode != "NONE":
         stop_improvement = setting_row("Tap stop improvement [%]", "Stop adding taps below this incremental improvement.", "number_input", min_value=0.0, value=1.0, key="stop_improvement")
     else:
-        stop_improvement = 1.0
+        stop_improvement = float(st.session_state.get("stop_improvement", 1.0))
 
     submitted = st.button("Run Analysis", type="primary", use_container_width=True)
 
@@ -474,6 +496,44 @@ settings = {
     "ffe_limit": ffe_limit,
     "dfe_taps": dfe_taps,
 }
+
+browser_settings = {
+    "channel_mode": channel_mode_label,
+    "tx_port": int(tx_port),
+    "rx_port": int(rx_port),
+    "tx_pos_port": int(tx_pos_port),
+    "tx_neg_port": int(tx_neg_port),
+    "rx_pos_port": int(rx_pos_port),
+    "rx_neg_port": int(rx_neg_port),
+    "matched_rx": bool(matched),
+    "rx_termination_se": float(st.session_state.get("rx_termination_se", 50.0)),
+    "rx_termination_diff": float(st.session_state.get("rx_termination_diff", 100.0)),
+    "symbol_rate": float(symbol_rate),
+    "tx_voltage": float(tx_voltage),
+    "pulse_width": float(pulse_width),
+    "rise_time": float(rise_time),
+    "fall_time": float(fall_time),
+    "cursor_pre": int(cursor_pre),
+    "cursor_post": int(cursor_post),
+    "time_unit": time_unit,
+    "decimal_places": int(decimal_places),
+    "ctle_db": float(ctle_db),
+    "eq_mode": eq_mode_label,
+    "ffe_pre": int(ffe_pre),
+    "ffe_post": int(ffe_post),
+    "ffe_limit": float(ffe_limit),
+    "dfe_taps": int(dfe_taps),
+    "stop_improvement": float(stop_improvement),
+}
+browser_settings_json = json.dumps(browser_settings, ensure_ascii=False, separators=(",", ":"))
+streamlit_js_eval(
+    js_expressions=(
+        "window.sessionStorage.setItem('sbrAnalyzerSettings', "
+        f"{json.dumps(browser_settings_json)}); true"
+    ),
+    want_output=False,
+    key="save_browser_settings",
+)
 
 if submitted:
     try:

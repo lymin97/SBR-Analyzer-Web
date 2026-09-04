@@ -16,6 +16,7 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 from scipy.linalg import solve
+from scipy.signal import fftconvolve
 
 # File-only backend: works on servers and Python installs without Tk.
 matplotlib.use("Agg")
@@ -535,12 +536,12 @@ def main():
         raise ValueError("The requested pre-cursor range exceeds the generated time record.")
     impulse = np.pad(impulse, (alignment_samples, 0))[:len(impulse)]
     tx = make_tx_pulse(time, ui)
-    rx_channel = np.convolve(impulse, tx, mode="full")[:len(time)]
+    rx_channel = fftconvolve(impulse, tx, mode="full")[:len(time)]
 
     ctle = ctle_response(f_bins, CTLE_DB, nyquist)
     impulse_ctle = np.fft.irfft(base_spectrum * ctle, n=len(time))
     impulse_ctle = np.pad(impulse_ctle, (alignment_samples, 0))[:len(impulse_ctle)]
-    rx_channel_ctle = np.convolve(impulse_ctle, tx, mode="full")[:len(time)]
+    rx_channel_ctle = fftconvolve(impulse_ctle, tx, mode="full")[:len(time)]
     k, cursors, positions, main_index = extract_cursors(rx_channel_ctle, dt, ui)
     main_pos = int(np.where(k == 0)[0][0])
     before_metric = isi_metric(cursors, main_pos)
