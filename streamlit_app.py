@@ -6,7 +6,6 @@ import contextlib
 import copy
 import base64
 import csv
-import html
 import io
 import json
 import re
@@ -422,6 +421,22 @@ st.markdown(
     div[data-testid="stNumberInput"] button {
         display: none;
     }
+    .st-key-use_example_file button {
+        min-height: auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        opacity: 0.65;
+        text-decoration: underline;
+        box-shadow: none;
+    }
+    .st-key-use_example_file button:hover {
+        color: inherit;
+        opacity: 0.9;
+        border: 0;
+        background: transparent;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -472,19 +487,12 @@ if effective_uploaded is None:
 if effective_uploaded is None:
     st.caption(f"Using example: {SAMPLE_FILE.name}")
 else:
-    st.markdown(
-        '<p style="font-size:0.875rem;color:rgba(49,51,63,0.6);margin:0.25rem 0 0.5rem 0;">'
-        f'Current file: {html.escape(effective_uploaded.name)}&nbsp; '
-        '<a href="?use_example=1" style="color:inherit;text-decoration:underline;">Use example</a>'
-        '</p>',
-        unsafe_allow_html=True,
-    )
-
-if st.query_params.get("use_example") == "1":
-    if not st.session_state.get("clear_upload_request"):
-        st.session_state["clear_upload_request"] = int(
-            st.session_state.get("clear_upload_request", 0)
-        ) + 1
+    with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        st.caption(f"Current file: {effective_uploaded.name}")
+        if st.button("Delete", key="use_example_file"):
+            st.session_state["clear_upload_request"] = int(
+                st.session_state.get("clear_upload_request", 0)
+            ) + 1
 
 if st.session_state.get("clear_upload_request"):
     clear_request = int(st.session_state["clear_upload_request"])
@@ -499,7 +507,6 @@ if st.session_state.get("clear_upload_request"):
         st.session_state.pop("detected_input_signature", None)
         st.session_state.pop("analysis_results", None)
         st.session_state.pop("clear_upload_request", None)
-        st.query_params.clear()
         st.rerun()
 
 if effective_uploaded is not None:
